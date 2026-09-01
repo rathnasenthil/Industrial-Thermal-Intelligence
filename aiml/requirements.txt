@@ -1,0 +1,18 @@
+pandas
+numpy
+scikit-learn
+xgboost
+scipy
+joblib
+geopandas
+shapely
+pyproj
+rasterio
+requests
+httpx
+matplotlib
+jupyter
+python-dotenv
+
+# Testing (environment/import sanity checks only)
+pytest
