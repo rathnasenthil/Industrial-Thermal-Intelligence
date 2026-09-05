@@ -61,8 +61,8 @@ python -m pytest
 Most placeholder modules still only have tests that verify the Python
 environment and that they import correctly. The implemented GIFT stages
 (FIRMS ingestion/preprocessing, Stage G, Stage G.1, Stage I.1, Stage I.2,
-Stage I.3, Stage I.4 — see below) all have real unit + integration test
-coverage (395 tests total as of Stage I.4).
+Stage I.3, Stage I.4, Stage I.5, Stage I.6, Stage I.7 — see below) all have
+real unit + integration test coverage (494 tests total as of Stage V).
 
 ## FIRMS ingestion & data-quality preprocessing
 
@@ -780,6 +780,327 @@ not physical burn persistence; long Stage G events are not split;
 can produce very large robust-deviation ratios (status thresholds still
 apply); thresholds/weights are engineering choices without independent
 ground-truth validation — **no accuracy claims are reported**.
+
+## GIFT Stage I.5 — NASA Static Thermal Anomaly Evidence
+
+**Purpose:** integrate NASA FIRMS **Static Thermal Anomaly (STA)** evidence
+with the existing thermal-event table. Answers only:
+
+> Does this thermal event spatially and/or temporally overlap NASA's
+> Static Thermal Anomaly evidence?
+
+It does **not** answer “is this an industrial fire?” and does **not**
+modify Stage I.4 anomaly scores.
+
+> **STA evidence ≠ ground truth.** NASA describes STA Mask and STA
+> Detections as experimental/provisional layers. A STA match is supporting
+> spatial/temporal evidence; a `NO_STA_ASSOCIATION` result does **not**
+> imply the event is non-industrial. STA must not be used as
+> pseudo-labels or as circular validation of Stage I.2 facility association.
+
+**STA layers**
+
+| Layer | Meaning |
+|---|---|
+| `MASK` | Persistent/static areas of frequently observed thermal activity (NASA construction over a multi-sensor calendar-year aggregation, then filtered with industrial/natural heat-source inventories). |
+| `DETECTION` | Dynamic detections tagged as likely associated with the STA Mask for a user-defined FIRMS date range. |
+
+These are kept distinct via `sta_layer_type` (`MASK` / `DETECTION`).
+
+**Provenance / source policy**
+
+NASA FIRMS documents STA in the Fire Map (Advanced Mode) under the
+Static Thermal Anomalies accordion. This stage does **not** hard-code an
+undocumented private download endpoint and does **not** fabricate STA
+geometries. Supply local extracts under `data/raw/` (gitignored):
+
+- `data/raw/nasa_firms_sta_mask.geojson` (or `.gpkg` / `.shp` / `.csv`)
+- `data/raw/nasa_firms_sta_detections.geojson` (optional)
+
+Supported formats: GeoJSON, GeoPackage, Shapefile, CSV
+(`latitude`/`longitude` or `geometry_wkt`). Documentation links used in
+config/reports:
+
+- https://www.earthdata.nasa.gov/news/blog/firms-releases-new-features-identify-active-fires-type
+- FIRMS Earthdata Wiki STA blog (see `STAConfig.sta_documentation_url`)
+
+If no local STA file is present, the CLI writes
+`sta_integration_report.json` with
+`status=production_sta_source_missing` and exits without inventing data.
+
+**Implementation** (`src/sta_evidence/`):
+
+- `sta_loader.py` — local vector load + clear missing-source error
+- `sta_normalization.py` — canonical schema, validation, deterministic IDs
+- `sta_matching.py` — STRtree/`sjoin` spatial matching in the same
+  India-centered Albers CRS as I.2 (`INDIA_EQUAL_AREA_CRS`); storage CRS
+  remains EPSG:4326
+- `sta_ranking.py` — deterministic candidate ranking + AMBIGUOUS handling
+- `sta_pipeline.py` / `sta_report.py` / `run_sta_integration.py`
+
+Run (from `aiml/`):
+
+```bash
+python -m src.sta_evidence.run_sta_integration
+# if STA files are not yet placed:
+python -m src.sta_evidence.run_sta_integration --allow-missing-source
+```
+
+**Spatial relationships:** `STA_INTERSECTS_EVENT` (event footprint ∩ STA
+geometry) takes precedence over `STA_NEAR_EVENT` (centroid-to-STA
+distance ≤ `association_radius_km`, default **1.0 km** — engineering
+threshold). Ranking: intersects → nearer distance → larger intersection
+area → MASK before DETECTION → `sta_id`. Near-ties → `AMBIGUOUS` (no
+forced primary).
+
+**Temporal:** MASK → `NOT_APPLICABLE`. DETECTION uses
+`observation_datetime` when present (`SAME_PERIOD` /
+`NEAR_EVENT_TIME` / `OUTSIDE_EVENT_TIME` / `UNKNOWN`). No invented
+timestamps.
+
+**Evidence quality** (`NONE`/`LOW`/`MEDIUM`/`HIGH`) describes STA match
+quality only — not fire probability.
+
+**Outputs** (created when STA sources are present):
+
+- `data/processed/sta_normalized.csv`
+- `data/processed/thermal_events_with_sta_evidence.csv` (all I.4 columns
+  preserved + I.5 fields; row count unchanged)
+- `data/processed/thermal_event_sta_candidates.csv`
+- `data/processed/sta_integration_report.json`
+
+I.4 fields (`anomaly_score`, `anomaly_status`, deviations, …) are never
+recalculated. Facility association fields are never rewritten from STA.
+
+**Current production status:** no local NASA STA extract is present in
+`data/raw/`; the latest report status is
+`production_sta_source_missing`. Unit/integration tests use **synthetic**
+fixtures only (not real NASA data).
+
+**Limitations:** experimental/provisional NASA status; incomplete
+industrial inventory filtering; spatial uncertainty; MASK is not a
+timestamped fire; coverage gaps; correlated evidence with OSM/I.2; no
+ground truth; no source classification / ML / risk scoring / Sentinel.
+
+## GIFT Stage I.6 — Satellite / Environmental Context
+
+**Purpose:** attach **environmental and land-surface context evidence** to
+every thermal event. Answers only:
+
+> What environmental / land-surface context surrounds this thermal event?
+
+It does **not** classify industrial fire, wildfire, agricultural fire, or
+any other source. That belongs to a later evidence-fusion stage.
+
+**Input:** prefers `thermal_events_with_sta_evidence.csv` (I.5). If that
+file was not produced (e.g. STA source missing), falls back to
+`thermal_events_with_anomaly_detection.csv` (I.4) and records a warning.
+All event IDs are preserved (179,740).
+
+**Supported local datasets** (never auto-downloaded; never fabricated):
+
+| Source | Expected path(s) | Format |
+|---|---|---|
+| Land cover | `data/external/landcover.tif` or `landcover.geojson` | GeoTIFF / GeoJSON |
+| Vegetation | `data/external/vegetation.geojson` | vector |
+| Built-up | `data/external/builtup.geojson` | vector |
+| Water | `data/external/water.geojson` | vector |
+| Agriculture | `data/external/agriculture.geojson` | vector |
+| Satellite context | `data/external/satellite_context.tif` | GeoTIFF |
+
+**This production run:** **no** environmental/satellite datasets were
+present under `data/raw/` or `data/external/` (only FIRMS CSVs + India
+OSM PBF). Every I.6 availability flag is `false` and numeric/categorical
+evidence fields are **null** — not zero.
+
+**Missing-data semantics:** unavailable evidence → `*_available=false` +
+null values. Missing ≠ zero coverage.
+
+**Methodology:** Stage G footprint/centroid; projected distances/buffers
+in the same India-centered Albers CRS as I.2; storage CRS EPSG:4326;
+configurable `context_buffer_km=1.0` and `broad_context_buffer_km=5.0`
+(engineering parameters). Spatial joins use GeoPandas/STRtree — never an
+events × features dense matrix. Land-cover class IDs are categorical
+(configurable `landcover_class_map`).
+
+**Implementation:** `src/environmental_context/`
+
+```bash
+python -m src.environmental_context.run_environmental_context
+```
+
+**Outputs:**
+
+- `data/processed/thermal_events_with_environmental_context.csv`
+- `data/processed/environmental_context_report.json`
+
+I.4 anomaly fields (and any I.5 STA columns when present) are never
+recalculated.
+
+**Limitations:** context buffers are engineering defaults; detection
+envelopes are not fire perimeters; no ML / pseudo-labels / risk scores;
+no live Sentinel API; results with all sources missing are valid
+unavailable-evidence outputs, not fabricated context.
+
+## GIFT Stage I.7 — Evidence Fusion / Source Intelligence
+
+**Purpose:** fuse **available** upstream evidence families into a structured
+**evidence profile**, ordinal **evidence scores**, and an optional
+**source-intelligence candidate** for every thermal event.
+
+> Evidence fusion is not ground truth generation.
+
+> I.7 candidate interpretations are deterministic evidence-based
+> interpretations, not independently validated source labels.
+
+I.7 does **not** claim scientific validation, does **not** train ML, and
+does **not** create pseudo-ground-truth labels.
+
+**Input:** `thermal_events_with_environmental_context.csv` (I.6). All
+179,740 event IDs are preserved.
+
+### Corrected multi-family fusion (post-audit)
+
+An earlier candidate tree was effectively an I.2 association remap. The
+corrected logic uses **ordinal engineering evidence scores** (not
+probabilities):
+
+| Score | Meaning |
+|---|---|
+| 0 | no supporting evidence |
+| 1 | weak supporting evidence |
+| 2 | moderate supporting evidence |
+| 3 | strong supporting evidence |
+
+**Families:**
+
+| Family | Upstream | Scoring (engineering defaults) |
+|---|---|---|
+| Infrastructure | I.2 method/confidence/type | `WITHIN`/`INTERSECTS` → up to 3; `NEAR` → 1–2 (never 3); `NO_FACILITY`/`AMBIGUOUS` → 0 for industrial infra |
+| Temporal | G.1 persistence | `PERSISTENT`/`RECURRING` → 2; `SHORT_LIVED`/`INSUFFICIENT_OBSERVATIONS` → 0. Persistence ≠ industrial origin |
+| Historical | I.3/I.4 baseline status | only with confirmed facility; `ESTABLISHED`→3 … `NO_PRIOR`→0; capped in aggregate to limit double-counting with infrastructure |
+| Anomaly | I.4 | `ANOMALOUS`→2; `ELEVATED`→1; `NORMAL`/`INSUFFICIENT_HISTORY`→0. Counts toward industrial aggregate only when infrastructure > 0. Anomaly ≠ industrial fire |
+| STA (optional) | I.5 | associated → 2 when available; missing → 0 contribution (**not** a penalty) |
+| Environmental (optional) | I.6 | separate `environmental_support_score`; missing → 0 (**not** natural/negative industrial evidence) |
+
+**Aggregation (documented, not validated):**
+
+`industrial_evidence_score = 2*infrastructure + temporal_eff + historical_eff(capped≤2) + anomaly_eff(if infra>0) + sta`
+
+Documented max = 14. Alias field: `evidence_fusion_score`.
+Also emitted: `evidence_strength` (`NONE`/`WEAK`/`MODERATE`/`STRONG`) and
+`evidence_coverage` (`present/total` domains).
+
+**Candidate gates (summary):**
+
+- `INDUSTRIAL_ACTIVITY_CANDIDATE`: infrastructure ≥ 3 (strong spatial association), optionally with corroboration; strong infra alone is allowed but strength reflects missing corroboration
+- `POSSIBLE_INDUSTRIAL_ACTIVITY`: moderate infra with corroboration, or weak/near infra with material corroboration — **NEAR alone is not auto-POSSIBLE**
+- `AMBIGUOUS_EVIDENCE`: unresolved facility/STA ambiguity
+- `MIXED_OR_CONFLICTING`: meaningful industrial + environmental support when env available
+- `ENVIRONMENTAL_*`: only with real I.6 evidence and no infra support
+- `INSUFFICIENT_EVIDENCE`: otherwise (including `PERSISTENT`/`ANOMALOUS` with no facility)
+
+Explanations use `supporting_evidence_codes` and `limiting_evidence_codes`
+(e.g. `STA_UNAVAILABLE`, `ENVIRONMENTAL_CONTEXT_UNAVAILABLE`,
+`INSUFFICIENT_CORROBORATION`).
+
+**Missing-data semantics:** unavailable STA/env → availability false /
+limiting codes / score 0. Missing ≠ negative. `NO_FACILITY_ASSOCIATION ≠ NATURAL`.
+
+**This corrected production run:**
+
+- STA: unavailable; Environmental: unavailable
+- Temporal + infrastructure: available
+- Candidate counts: INDUSTRIAL 13,061; POSSIBLE 18,710; AMBIGUOUS 17,542;
+  INSUFFICIENT 130,427
+- `NEAR_FACILITY` now splits into POSSIBLE (18,710) vs INSUFFICIENT (8,308)
+  based on corroboration — no longer a 1:1 I.2 remap
+- Within `WITHIN_FACILITY`, `industrial_evidence_score` ranges 6–12 as
+  temporal/history/anomaly corroboration varies
+
+**Implementation:** `src/evidence_fusion/` (`evidence_scores.py`,
+`candidate_interpretation.py`, …)
+
+```bash
+python -m src.evidence_fusion.run_evidence_fusion
+```
+
+**Outputs:**
+
+- `data/processed/thermal_events_with_evidence_fusion.csv`
+- `data/processed/evidence_fusion_report.json`
+
+Prior-stage fields (G→I.6), including all I.4 anomaly fields, are never
+recalculated. `candidate_is_ground_truth` is always false.
+
+**Limitations:** ordinal weights/thresholds are engineering defaults only;
+candidates are not ground truth; STA/env absence does not imply
+non-industrial or natural origin; no ML / risk / probability claims;
+`WITHIN`/`INTERSECTS` with high confidence still often remain INDUSTRIAL
+because strong infrastructure alone is an allowed gate — corroboration
+changes score/strength and is required for weaker infra paths.
+
+## GIFT Stage V — Independent Validation & Evaluation
+
+**Objective:** independently evaluate how well the evidence-fusion system
+distinguishes industrial thermal activity from non-industrial/natural
+activity.
+
+> Validation metrics are reported only when independent reference labels
+> are available.
+
+> Pipeline-derived evidence is not used as ground truth.
+
+**Independent validation principle:** do **not** treat I.2 facility
+association, I.3 history, I.4 anomaly, I.5 STA, I.6 context, or I.7
+candidates as ground truth. Circular validation is rejected by the
+leakage audit (`FORBIDDEN_PSEUDO_LABEL_SOURCES`).
+
+**Validation schema** (`validation_id`, `reference_label_raw`,
+`reference_label_normalized`, `reference_source`, coordinates/date,
+independence flags, match status). Normalized vocabulary:
+`INDUSTRIAL` / `NATURAL` / `AGRICULTURAL` / `OTHER` / `AMBIGUOUS` /
+`UNKNOWN`.
+
+**Event matching:** separate from I.2. Haversine BallTree + temporal
+window (`spatial_tolerance_km=5`, `temporal_tolerance_hours=72` —
+engineering defaults). States: `MATCHED`,
+`MULTIPLE_POSSIBLE_MATCHES`, `NO_EVENT_MATCH`, `INVALID_REFERENCE`.
+
+**Metrics (only if independent labels exist):** confusion matrix,
+precision/recall/F1/specificity/balanced accuracy, coverage,
+abstention rate; strict vs inclusive candidate→label evaluation
+mappings (documented, not identity); multiclass when supported;
+ablation over available families (STA/env reported unavailable when
+absent); descriptive evidence-strength analysis (**not** probability
+calibration); error analysis; leakage audit.
+
+**Current production availability:** **NO** independent validation
+dataset was found under `data/external/`, `data/raw/`, or
+`data/processed/` (only FIRMS CSVs + India OSM PBF). Status:
+`VALIDATION_DATA_UNAVAILABLE`. Metrics are `NOT_EVALUATED` (null, not
+fake zeros).
+
+**NO VALIDATED PERFORMANCE CLAIM IS MADE.**
+
+**Implementation:** `src/validation/`
+
+```bash
+python -m src.validation.run_validation
+# optional: --validation path/to/independent_labels.csv
+```
+
+**Outputs:**
+
+- `data/processed/validation_event_matches.csv` (0 rows when unavailable)
+- `data/processed/validation_metrics.json`
+- `data/processed/validation_report.json`
+
+Stage V is read-only w.r.t. G→I.7 outputs.
+
+**Limitations:** framework-complete, evaluation pending independent
+labels; match tolerances are engineering defaults; candidate evaluation
+mappings are conventions for scoring, not claims that I.7 equals truth.
 
 ## Notes
 
