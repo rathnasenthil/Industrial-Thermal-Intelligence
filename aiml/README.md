@@ -61,8 +61,8 @@ python -m pytest
 Most placeholder modules still only have tests that verify the Python
 environment and that they import correctly. The implemented GIFT stages
 (FIRMS ingestion/preprocessing, Stage G, Stage G.1, Stage I.1, Stage I.2,
-Stage I.3 — see below) all have real unit + integration test coverage
-(343 tests total as of Stage I.3).
+Stage I.3, Stage I.4 — see below) all have real unit + integration test
+coverage (395 tests total as of Stage I.4).
 
 ## FIRMS ingestion & data-quality preprocessing
 
@@ -688,6 +688,98 @@ facilities do not have a statistically robust baseline; the two history
 thresholds are engineering choices pending future calibration; no
 anomaly score, source classification, or ML model is computed anywhere
 in this stage.
+
+## GIFT Stage I.4 — Temporal Deviation & Anomaly Detection
+
+**Purpose:** decide whether a thermal event with a *confirmed* Stage I.2
+facility association is **unusual relative to that facility's own prior
+confirmed associations**.
+
+> **Anomaly ≠ industrial fire.** An `ANOMALOUS` / `ELEVATED` result means
+> the event's thermal/spatial/persistence pattern differs from what this
+> facility has looked like historically. It is **not** a source
+> classification, risk score, or claim of illegal/hazardous activity.
+
+**Walk-forward / prior-only baseline (mandatory):** for each facility,
+confirmed events are sorted by `(event_start ASC, event_id ASC)`. Event
+N is scored using **only** events 1..N−1. The current event is appended
+to history **after** scoring. This avoids temporal leakage from building
+a baseline that includes the observation being scored. Stage I.3's
+full-history fingerprints are loaded for provenance only and are **never**
+used as the scoring baseline.
+
+**Ambiguous / unassociated events:** `AMBIGUOUS` and
+`NO_FACILITY_ASSOCIATION` events are preserved in the output with
+`anomaly_status=INSUFFICIENT_HISTORY`. They never enter any facility's
+confirmed history and are never silently assigned to a facility.
+
+Lives in `src/anomaly_detection/`:
+
+- `config.py` — engineering thresholds/weights (history cutoffs matching
+  I.3's 3/10 defaults; `normal_max_score=2.0`, `elevated_max_score=3.5`;
+  feature weights; zero-MAD constant-mismatch deviation=3.0).
+- `robust_deviation.py` — robust deviation index
+  `|x − median| / MAD` (raw MAD, **not** a z-score, never ×1.4826);
+  zero-MAD handling (same→0; different→IQR fallback or documented
+  constant-mismatch deviation).
+- `temporal_baseline.py` — walk-forward per-facility history + feature
+  deviations (peak FRP, detection count, duration, distance, persistence
+  rarity from G.1 labels, prior-only same-month peak FRP).
+- `anomaly_scoring.py` — weighted mean of *available* feature deviations
+  (missing features excluded, not treated as zero); status + confidence.
+- `anomaly_explanation.py` — deterministic template explanations (no LLM).
+- `anomaly_report.py` / `anomaly_pipeline.py` / `run_anomaly_detection.py`.
+
+Run it (from this `aiml/` directory, after Stage I.2):
+
+```bash
+python -m src.anomaly_detection.run_anomaly_detection
+```
+
+**Anomaly status** (engineering thresholds on the robust-deviation score):
+
+| Status | Rule |
+|---|---|
+| `INSUFFICIENT_HISTORY` | <3 prior confirmed observations at the facility, or no confirmed association / ambiguous |
+| `NORMAL` | score < 2.0 |
+| `ELEVATED` | 2.0 ≤ score < 3.5 |
+| `ANOMALOUS` | score ≥ 3.5 |
+
+**Confidence** (`NONE` / `LOW` / `MEDIUM` / `HIGH`) reflects evidence
+quality (prior history depth + features evaluated) — **not** a fire
+probability.
+
+**Outputs:**
+
+- `data/processed/thermal_events_with_anomaly_detection.csv` — all
+  original event columns plus I.4 fields (`anomaly_score`,
+  `anomaly_status`, `anomaly_confidence`, per-feature deviations,
+  baseline medians/MADs, `anomaly_explanation`). Same row count as
+  input; no event deleted.
+- `data/processed/anomaly_detection_report.json` — coverage, status/
+  confidence counts, feature availability, configuration, leakage
+  validation note, limitations.
+
+**Real production run** (179,740 events; walk-forward over 40,079
+confirmed associations):
+
+| Metric | Value |
+|---|---|
+| `INSUFFICIENT_HISTORY` | 155,353 |
+| `NORMAL` | 16,610 |
+| `ELEVATED` | 3,292 |
+| `ANOMALOUS` | 4,485 |
+| Confidence `NONE` / `MEDIUM` / `HIGH` | 155,353 / 10,362 / 14,025 |
+| Runtime | ~274 s |
+
+**Limitations:** most facilities lack confirmed history, so most events
+cannot be strongly scored; OSM association ≠ source identity; FIRMS is
+not continuous ground truth; G.1 persistence is an observation pattern,
+not physical burn persistence; long Stage G events are not split;
+2023–2024 may miss some operational regimes; near-zero historical MAD
+can produce very large robust-deviation ratios (status thresholds still
+apply); thresholds/weights are engineering choices without independent
+ground-truth validation — **no accuracy claims are reported**.
 
 ## Notes
 
