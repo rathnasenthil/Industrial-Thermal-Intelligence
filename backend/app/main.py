@@ -8,7 +8,16 @@ from app.core.logging import configure_logging
 configure_logging()
 settings = get_settings()
 
-app = FastAPI(title=settings.app_name)
+app = FastAPI(
+    title=settings.app_name,
+    description=(
+        "REST API over frozen AIML Stage VI thermal events and Stage I.1 "
+        "facilities. risk_score is a decision-support prioritization score, "
+        "not a fire probability. Missing STA/environmental evidence is "
+        "unavailable, not negative evidence. /api/alerts is an investigation "
+        "priority view, not an emergency dispatch system."
+    ),
+)
 
 app.add_middleware(
     CORSMiddleware,
