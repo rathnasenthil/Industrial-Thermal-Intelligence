@@ -6,11 +6,11 @@ class Base(DeclarativeBase):
     Shared declarative base for all ORM models.
 
     GeoAlchemy2 column types (e.g. `geoalchemy2.Geometry`) can be used directly
-    on models that inherit from this base once the actual data models are
-    defined in `app/models/`.
+    on models that inherit from this base.
     """
 
 
-# TODO: Import model modules here once they exist, e.g.:
-#   from app.models.thermal_event import ThermalEvent  # noqa: F401
-# so Alembic autogenerate can discover them via `Base.metadata`.
+# Import model modules for Alembic metadata discovery (avoid circular package import).
+from app.models import facility as _facility  # noqa: E402, F401
+from app.models import thermal_event as _thermal_event  # noqa: E402, F401
+from app.models import event_facility_candidate as _event_facility_candidate  # noqa: E402, F401
