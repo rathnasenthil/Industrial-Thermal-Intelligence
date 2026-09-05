@@ -62,7 +62,7 @@ Most placeholder modules still only have tests that verify the Python
 environment and that they import correctly. The implemented GIFT stages
 (FIRMS ingestion/preprocessing, Stage G, Stage G.1, Stage I.1, Stage I.2,
 Stage I.3, Stage I.4, Stage I.5, Stage I.6, Stage I.7 — see below) all have
-real unit + integration test coverage (494 tests total as of Stage V).
+real unit + integration test coverage (505 tests total as of Stage VI).
 
 ## FIRMS ingestion & data-quality preprocessing
 
@@ -1101,6 +1101,67 @@ Stage V is read-only w.r.t. G→I.7 outputs.
 **Limitations:** framework-complete, evaluation pending independent
 labels; match tolerances are engineering defaults; candidate evaluation
 mappings are conventions for scoring, not claims that I.7 equals truth.
+
+## GIFT Stage VI — Decision & Risk Prioritization
+
+**Objective:** produce an explainable **investigation priority** for each
+thermal event — how urgently it should be reviewed given available
+evidence — **not** a confirmed industrial-fire classification.
+
+> Investigation priority is a deterministic decision-support score, not a
+> probability of industrial fire.
+
+> Missing evidence is treated as unavailable evidence, not negative
+> evidence.
+
+> Risk prioritization has not been independently validated because Stage V
+> currently has no independent reference dataset.
+
+**Separates:**
+
+| Concept | Field | Meaning |
+|---|---|---|
+| Industrial context | `industrial_context` | STRONG / POSSIBLE / AMBIGUOUS / INSUFFICIENT (from I.7 candidate mapping) |
+| Investigation priority | `investigation_priority` | LOW / MEDIUM / HIGH / CRITICAL |
+| Risk score | `risk_score` | 0–100 deterministic aggregate (**not** probability) |
+
+These are **not** merged: e.g. `INSUFFICIENT` + `MEDIUM` and `STRONG` + `LOW` are valid.
+
+**Score components** (configurable engineering weights):
+
+- thermal severity (log1p FRP + detections + duration; batch rank mix)
+- persistence / recurrence (G.1)
+- temporal anomaly (I.4; ANOMALOUS ≠ fire)
+- facility context (I.2 relation/type/confidence; proximity ≠ proof)
+- industrial evidence component (scaled from I.7 score; separate from risk)
+- uncertainty band (missing STA/env/history recorded; **not** anti-industrial)
+- ambiguity dampening only for AMBIGUOUS facility (not missing STA/env)
+
+**Priority bands (engineering defaults):** 0–24 LOW, 25–49 MEDIUM,
+50–74 HIGH, 75–100 CRITICAL. Optional floor: EXTREME thermal → at least
+MEDIUM.
+
+**Explanations:** `priority_reasons`, `priority_warnings`,
+`dominant_risk_factors`, `dominant_uncertainty_factors`,
+`risk_limiting_evidence_codes`.
+
+**Current production:** STA unavailable; environmental unavailable;
+179,740 events preserved; I.7 fields unchanged.
+
+**Implementation:** `src/risk_prioritization/`
+
+```bash
+python -m src.risk_prioritization.run_risk_prioritization
+```
+
+**Outputs:**
+
+- `data/processed/thermal_events_with_risk_prioritization.csv`
+- `data/processed/risk_prioritization_report.json`
+
+**Limitations:** weights/thresholds unvalidated; no ML/probabilities;
+no emergency-dispatch semantics (`recommended_action` is decision support
+only: MONITOR / REVIEW / PRIORITIZE_INVESTIGATION / URGENT_REVIEW).
 
 ## Notes
 
