@@ -1,18 +1,18 @@
 """
-Backend adapter: incremental thermal-event formation (Phase 3) + G.1 (Phase 4).
+Backend adapter: incremental thermal-event formation (Phase 3), G.1 (Phase 4),
+and I.2 facility association (Phase 5).
 
 Translates DB rows ↔ AIML ``realtime`` plain objects, allocates stable
 ``EVT_#######`` IDs from a PostgreSQL sequence, and commits observation
 linkage transactionally.
 
-Phase 4 recomputes Stage G.1 persistence fields for the *affected event only*
-from ``event_detections`` → FIRMS timestamps via AIML
-``realtime.persistence.process_event_persistence``. Persistence means
-repeatedly observed thermal activity over time — not confirmed fire.
+Phase 4 recomputes Stage G.1 persistence fields for the *affected event only*.
+Phase 5 recomputes Stage I.2 facility association for the *affected event only*
+(spatial attribution — not source classification).
 
 Does not run ST-DBSCAN batch clustering, full-table
-``run_persistence_characterization``, facility association, anomaly,
-fusion, or risk scoring.
+``run_persistence_characterization``, full-table ``run_facility_association``,
+anomaly, fusion, or risk scoring.
 """
 
 from __future__ import annotations
@@ -48,6 +48,9 @@ from realtime.schemas import (  # noqa: E402
     MatchAction,
     ObservationRecord,
 )
+from app.services.facility_association import (  # noqa: E402
+    refresh_event_facility_association,
+)
 
 
 @dataclass
@@ -63,6 +66,9 @@ class EventFormationStats:
     persistence_updated: int = 0
     persistence_unchanged: int = 0
     persistence_by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Phase 5
+    facility_association_updated: int = 0
+    facility_association_by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -407,6 +413,8 @@ def process_one_observation(
 
     # Phase 4: G.1 for the affected event only (same transaction).
     refresh_event_persistence(session, state.event_id)
+    # Phase 5: I.2 facility association for the affected event only.
+    refresh_event_facility_association(session, state.event_id)
     return result.action
 
 
@@ -419,11 +427,12 @@ def process_unassigned_observations(
     commit: bool = True,
 ) -> EventFormationStats:
     """
-    Process FIRMS observations with NULL event_id through Phase 3 + Phase 4.
+    Process FIRMS observations with NULL event_id through Phases 3–5.
 
-    Phase 3 attaches detections; Phase 4 recomputes G.1 persistence fields
-    for each affected event only. Does not run batch
-    ``run_persistence_characterization()`` over historical events.
+    Phase 3 attaches detections; Phase 4 recomputes G.1; Phase 5 runs I.2
+    facility association for each affected event only. Does not run batch
+    ``run_persistence_characterization`` or ``run_facility_association``
+    over historical events.
     """
     cfg = config or default_realtime_config()
     stats = EventFormationStats()
@@ -470,9 +479,17 @@ def process_unassigned_observations(
                     "max_gap_hours": event.max_gap_hours,
                     "persistence_label": event.persistence_label,
                 }
+                stats.facility_association_by_event[obs.event_id] = {
+                    "facility_id": event.facility_id,
+                    "facility_association_method": event.facility_association_method,
+                    "facility_attribution_confidence": event.facility_attribution_confidence,
+                    "facility_distance_km": event.facility_distance_km,
+                    "candidate_facility_count": event.candidate_facility_count,
+                }
 
     unique_touched = sorted(set(stats.event_ids_touched))
     stats.persistence_updated = len(unique_touched)
+    stats.facility_association_updated = len(unique_touched)
     stats.persistence_unchanged = 0
 
     if commit:
@@ -481,12 +498,13 @@ def process_unassigned_observations(
         session.flush()
 
     logger.info(
-        "Phase 3+4 formation/persistence: processed=%s created=%s matched=%s "
-        "persistence_events=%s skipped=%s",
+        "Phase 3-5 formation/persistence/association: processed=%s created=%s "
+        "matched=%s persistence_events=%s association_events=%s skipped=%s",
         stats.processed,
         stats.created,
         stats.matched,
         stats.persistence_updated,
+        stats.facility_association_updated,
         stats.skipped_already_assigned + stats.skipped_invalid,
     )
     return stats

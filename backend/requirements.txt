@@ -9,5 +9,8 @@ alembic
 python-dotenv
 httpx
 pandas
+geopandas
+shapely
+pyproj
 pytest
 pytest-asyncio
