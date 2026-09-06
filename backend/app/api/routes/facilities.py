@@ -1,4 +1,4 @@
-"""Facility REST endpoints."""
+﻿"""Facility REST endpoints."""
 
 from __future__ import annotations
 

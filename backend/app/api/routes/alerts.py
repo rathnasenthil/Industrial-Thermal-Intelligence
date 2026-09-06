@@ -1,4 +1,4 @@
-"""
+﻿"""
 Investigation-priority alert view.
 
 Returns HIGH/CRITICAL investigation_priority events. This is not an emergency

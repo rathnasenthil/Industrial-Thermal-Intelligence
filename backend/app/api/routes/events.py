@@ -1,4 +1,4 @@
-"""Thermal event REST endpoints."""
+﻿"""Thermal event REST endpoints."""
 
 from __future__ import annotations
 

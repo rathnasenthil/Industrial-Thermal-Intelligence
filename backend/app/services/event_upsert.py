@@ -1,11 +1,17 @@
 """
-Backend adapter: persist incremental thermal-event formation (Phase 3).
+Backend adapter: incremental thermal-event formation (Phase 3) + G.1 (Phase 4).
 
 Translates DB rows ↔ AIML ``realtime`` plain objects, allocates stable
 ``EVT_#######`` IDs from a PostgreSQL sequence, and commits observation
 linkage transactionally.
 
-Does not run ST-DBSCAN batch clustering, facility association, anomaly,
+Phase 4 recomputes Stage G.1 persistence fields for the *affected event only*
+from ``event_detections`` → FIRMS timestamps via AIML
+``realtime.persistence.process_event_persistence``. Persistence means
+repeatedly observed thermal activity over time — not confirmed fire.
+
+Does not run ST-DBSCAN batch clustering, full-table
+``run_persistence_characterization``, facility association, anomaly,
 fusion, or risk scoring.
 """
 
@@ -36,6 +42,7 @@ if str(_AIML_ROOT) not in sys.path:
 from realtime.config import RealtimeEventConfig, default_realtime_config  # noqa: E402
 from realtime.event_matcher import events_to_deactivate  # noqa: E402
 from realtime.incremental_processor import process_observation  # noqa: E402
+from realtime.persistence import PersistenceFeatures, process_event_persistence  # noqa: E402
 from realtime.schemas import (  # noqa: E402
     ActiveEventState,
     MatchAction,
@@ -52,6 +59,10 @@ class EventFormationStats:
     skipped_invalid: int = 0
     deactivated: int = 0
     event_ids_touched: list[str] = field(default_factory=list)
+    # Phase 4
+    persistence_updated: int = 0
+    persistence_unchanged: int = 0
+    persistence_by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -216,6 +227,92 @@ def _apply_state_to_existing_event(event: ThermalEvent, state: ActiveEventState)
     event.updated_at = now
 
 
+def load_event_detection_datetimes(session: Session, event_id: str) -> list[datetime]:
+    """
+    Load FIRMS acquisition times for one event via ``event_detections``.
+
+    Plain datetimes only — AIML persistence must not depend on ORM rows.
+    """
+    rows = session.execute(
+        select(FirmsObservation.acq_datetime)
+        .join(
+            EventDetection,
+            EventDetection.observation_hash == FirmsObservation.observation_hash,
+        )
+        .where(EventDetection.event_id == event_id)
+        .order_by(FirmsObservation.acq_datetime.asc().nullslast())
+    ).all()
+    out: list[datetime] = []
+    for (acq,) in rows:
+        if acq is None:
+            continue
+        out.append(_ensure_utc(acq))
+    return out
+
+
+def _persistence_snapshot(event: ThermalEvent) -> tuple:
+    """Comparable tuple of G.1 fields currently stored on the event."""
+    return (
+        event.detection_count,
+        event.distinct_detection_days,
+        event.span_days,
+        event.observed_duration_hours,
+        event.duty_cycle,
+        event.mean_gap_hours,
+        event.max_gap_hours,
+        event.persistence_label,
+        event.persistence_basis,
+    )
+
+
+def apply_persistence_features(event: ThermalEvent, features: PersistenceFeatures) -> bool:
+    """
+    Write G.1 fields onto an existing ThermalEvent row.
+
+    Reuses Stage VII columns; does not create schema. Returns True if any
+    tracked persistence field changed.
+    """
+    before = _persistence_snapshot(event)
+    event.detection_count = features.detection_count
+    event.distinct_detection_days = features.distinct_detection_days
+    event.span_days = float(features.span_days)
+    event.observed_duration_hours = features.observed_duration_hours
+    event.duty_cycle = features.duty_cycle
+    event.mean_gap_hours = features.mean_gap_hours
+    event.max_gap_hours = features.max_gap_hours
+    event.persistence_label = features.persistence_label
+    event.persistence_basis = features.persistence_basis
+    # Keep temporal anchors consistent with the detection set used for G.1.
+    event.event_start = features.event_start
+    event.event_end = features.event_end
+    event.updated_at = datetime.now(timezone.utc)
+    after = _persistence_snapshot(event)
+    return before != after
+
+
+def refresh_event_persistence(
+    session: Session,
+    event_id: str,
+) -> PersistenceFeatures:
+    """
+    Phase 4: recompute G.1 for one event from its linked detections.
+
+    Does **not** call ``run_persistence_characterization()`` over all events.
+    """
+    times = load_event_detection_datetimes(session, event_id)
+    if not times:
+        raise ValueError(f"event {event_id} has no linked detection timestamps")
+    features = process_event_persistence(event_id, times)
+    event = session.scalar(
+        select(ThermalEvent).where(ThermalEvent.event_id == event_id)
+    )
+    if event is None:
+        raise RuntimeError(f"ThermalEvent missing for persistence update: {event_id}")
+    apply_persistence_features(event, features)
+    session.flush()
+    return features
+
+
 def process_one_observation(
     session: Session,
     obs: FirmsObservation,
@@ -307,6 +404,9 @@ def process_one_observation(
     )
     obs.event_id = state.event_id
     session.flush()
+
+    # Phase 4: G.1 for the affected event only (same transaction).
+    refresh_event_persistence(session, state.event_id)
     return result.action
 
 
@@ -319,12 +419,11 @@ def process_unassigned_observations(
     commit: bool = True,
 ) -> EventFormationStats:
     """
-    Process FIRMS observations with NULL event_id through Phase 3.
+    Process FIRMS observations with NULL event_id through Phase 3 + Phase 4.
 
-    Each observation is handled in the same session; commit once at the end
-    when ``commit=True``. Per-observation failures roll back only if the
-    caller wraps differently — here we process sequentially and commit as a
-    batch for the poll cycle.
+    Phase 3 attaches detections; Phase 4 recomputes G.1 persistence fields
+    for each affected event only. Does not run batch
+    ``run_persistence_characterization()`` over historical events.
     """
     cfg = config or default_realtime_config()
     stats = EventFormationStats()
@@ -356,16 +455,38 @@ def process_unassigned_observations(
         else:
             stats.skipped_invalid += 1
 
+        if obs.event_id and action in {MatchAction.CREATED, MatchAction.MATCHED}:
+            event = session.scalar(
+                select(ThermalEvent).where(ThermalEvent.event_id == obs.event_id)
+            )
+            if event is not None:
+                stats.persistence_by_event[obs.event_id] = {
+                    "detection_count": event.detection_count,
+                    "distinct_detection_days": event.distinct_detection_days,
+                    "span_days": event.span_days,
+                    "observed_duration_hours": event.observed_duration_hours,
+                    "duty_cycle": event.duty_cycle,
+                    "mean_gap_hours": event.mean_gap_hours,
+                    "max_gap_hours": event.max_gap_hours,
+                    "persistence_label": event.persistence_label,
+                }
+
+    unique_touched = sorted(set(stats.event_ids_touched))
+    stats.persistence_updated = len(unique_touched)
+    stats.persistence_unchanged = 0
+
     if commit:
         session.commit()
     else:
         session.flush()
 
     logger.info(
-        "Phase 3 event formation: processed=%s created=%s matched=%s skipped=%s",
+        "Phase 3+4 formation/persistence: processed=%s created=%s matched=%s "
+        "persistence_events=%s skipped=%s",
         stats.processed,
         stats.created,
         stats.matched,
+        stats.persistence_updated,
         stats.skipped_already_assigned + stats.skipped_invalid,
     )
     return stats

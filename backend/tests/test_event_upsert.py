@@ -93,6 +93,16 @@ def _insert_obs(session, *, lat, lon, acq_time, frp="2.0", acq_date="2026-09-05"
 
 
 def _cleanup(session) -> None:
+    """Remove Phase 3 test rows without CASCADE-deleting real NRT events."""
+    test_event_ids = list(
+        session.execute(
+            text(
+                "SELECT DISTINCT event_id FROM firms_observations "
+                "WHERE satellite = :s AND event_id IS NOT NULL"
+            ),
+            {"s": MARKER},
+        ).scalars()
+    )
     session.execute(
         text(
             "DELETE FROM event_detections WHERE observation_hash IN "
@@ -101,14 +111,23 @@ def _cleanup(session) -> None:
         {"s": MARKER},
     )
     session.execute(
-        text(
-            "DELETE FROM thermal_events WHERE event_id IN "
-            "(SELECT DISTINCT event_id FROM firms_observations "
-            " WHERE satellite = :s AND event_id IS NOT NULL)"
-        ),
+        text("UPDATE firms_observations SET event_id = NULL WHERE satellite = :s"),
         {"s": MARKER},
     )
-    # Also delete NRT events created in tests that might not be linked if failed mid-way
+    for eid in test_event_ids:
+        remaining_obs = session.execute(
+            text("SELECT COUNT(*) FROM firms_observations WHERE event_id = :e"),
+            {"e": eid},
+        ).scalar()
+        remaining_dets = session.execute(
+            text("SELECT COUNT(*) FROM event_detections WHERE event_id = :e"),
+            {"e": eid},
+        ).scalar()
+        if int(remaining_obs or 0) == 0 and int(remaining_dets or 0) == 0:
+            session.execute(
+                text("DELETE FROM thermal_events WHERE event_id = :e"),
+                {"e": eid},
+            )
     session.execute(
         text("DELETE FROM firms_observations WHERE satellite = :s"),
         {"s": MARKER},
@@ -122,8 +141,8 @@ def test_db_create_match_idempotent_and_aggregates(db_session) -> None:
 
     hist_before = db_session.scalar(select(func.count()).select_from(ThermalEvent))
 
-    o1 = _insert_obs(db_session, lat=20.0, lon=85.0, acq_time="0600", frp="2.0")
-    o2 = _insert_obs(db_session, lat=20.004, lon=85.0, acq_time="0700", frp="6.0")
+    o1 = _insert_obs(db_session, lat=-40.0, lon=-170.0, acq_time="0600", frp="2.0")
+    o2 = _insert_obs(db_session, lat=-40.004, lon=-170.0, acq_time="0700", frp="6.0")
     db_session.commit()
 
     stats = process_unassigned_observations(
@@ -182,8 +201,8 @@ def test_db_create_match_idempotent_and_aggregates(db_session) -> None:
 @REQUIRES_POSTGIS
 def test_spatial_split_creates_two_events(db_session) -> None:
     _cleanup(db_session)
-    o1 = _insert_obs(db_session, lat=20.0, lon=85.0, acq_time="0600")
-    o2 = _insert_obs(db_session, lat=21.0, lon=85.0, acq_time="0610")  # ~111 km
+    o1 = _insert_obs(db_session, lat=-40.0, lon=-170.0, acq_time="0600")
+    o2 = _insert_obs(db_session, lat=-41.0, lon=-170.0, acq_time="0610")  # ~111 km
     db_session.commit()
     stats = process_unassigned_observations(
         db_session,
@@ -198,7 +217,7 @@ def test_spatial_split_creates_two_events(db_session) -> None:
 @REQUIRES_POSTGIS
 def test_temporal_split_and_inactive_lifecycle(db_session) -> None:
     _cleanup(db_session)
-    o1 = _insert_obs(db_session, lat=20.0, lon=85.0, acq_time="0600")
+    o1 = _insert_obs(db_session, lat=-40.0, lon=-170.0, acq_time="0600")
     db_session.commit()
     process_unassigned_observations(
         db_session,
@@ -218,7 +237,7 @@ def test_temporal_split_and_inactive_lifecycle(db_session) -> None:
     event.is_active = True
     db_session.commit()
 
-    o2 = _insert_obs(db_session, lat=20.001, lon=85.0, acq_time="0800")
+    o2 = _insert_obs(db_session, lat=-40.001, lon=-170.0, acq_time="0800")
     db_session.commit()
     stats = process_unassigned_observations(
         db_session,
@@ -251,7 +270,7 @@ def test_allocate_event_id_format_and_historical_preserved(db_session) -> None:
 @REQUIRES_POSTGIS
 def test_event_detection_unique_constraint(db_session) -> None:
     _cleanup(db_session)
-    o1 = _insert_obs(db_session, lat=22.0, lon=86.0, acq_time="0900")
+    o1 = _insert_obs(db_session, lat=-42.0, lon=-171.0, acq_time="0900")
     db_session.commit()
     process_unassigned_observations(
         db_session,

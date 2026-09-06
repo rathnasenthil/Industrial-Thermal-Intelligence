@@ -1,4 +1,4 @@
-"""Shared pagination and geometry response helpers."""
+﻿"""Shared pagination and geometry response helpers."""
 
 from __future__ import annotations
 
