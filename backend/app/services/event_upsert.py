@@ -1,18 +1,35 @@
 """
-Backend adapter: incremental thermal-event formation (Phase 3) + G.1 (Phase 4).
+Backend adapter: incremental thermal-event formation (Phase 3), G.1 (Phase 4),
+I.2 facility association (Phase 5), I.3 facility fingerprinting (Phase 6),
+I.4 temporal anomaly detection (Phase 7), I.5 STA evidence (Phase 8),
+I.6 environmental context (Phase 9), I.7 evidence fusion (Phase 10),
+and Stage VI risk prioritization (Phase 11).
 
 Translates DB rows ↔ AIML ``realtime`` plain objects, allocates stable
 ``EVT_#######`` IDs from a PostgreSQL sequence, and commits observation
 linkage transactionally.
 
-Phase 4 recomputes Stage G.1 persistence fields for the *affected event only*
-from ``event_detections`` → FIRMS timestamps via AIML
-``realtime.persistence.process_event_persistence``. Persistence means
-repeatedly observed thermal activity over time — not confirmed fire.
+Phase 4 recomputes Stage G.1 persistence fields for the *affected event only*.
+Phase 5 recomputes Stage I.2 facility association for the *affected event only*
+(spatial attribution — not source classification).
+Phase 6 recomputes Stage I.3 fingerprints for *affected facilities only*
+(descriptive baseline — not anomaly detection).
+Phase 7 recomputes Stage I.4 walk-forward anomaly for the *affected event only*
+(prior-only temporal deviation — not risk / fire classification).
+Phase 8 recomputes Stage I.5 STA evidence for the *affected event only*
+(supporting evidence — not ground truth / industrial-fire classification).
+Phase 9 recomputes Stage I.6 environmental context for the *affected event only*
+(context/evidence — not classification / risk).
+Phase 10 recomputes Stage I.7 evidence fusion for the *affected event only*
+(interpretation — not ground truth / risk probability).
+Phase 11 recomputes Stage VI risk prioritization for the *affected event only*
+(decision-support score — not fire probability).
 
 Does not run ST-DBSCAN batch clustering, full-table
-``run_persistence_characterization``, facility association, anomaly,
-fusion, or risk scoring.
+``run_persistence_characterization``, full-table ``run_facility_association``,
+full-table ``run_facility_fingerprinting``, full-table ``run_anomaly_detection``,
+full-table ``run_sta_integration``, full-table ``run_environmental_context``,
+full-table ``run_evidence_fusion``, or full-table ``run_risk_prioritization``.
 """
 
 from __future__ import annotations
@@ -29,6 +46,8 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.models.event_detection import EventDetection
+from app.models.event_facility_candidate import EventFacilityCandidate
+from app.models.facility_thermal_fingerprint import FacilityThermalFingerprint
 from app.models.firms_observation import FirmsObservation
 from app.models.thermal_event import ThermalEvent
 
@@ -48,6 +67,17 @@ from realtime.schemas import (  # noqa: E402
     MatchAction,
     ObservationRecord,
 )
+from app.services.facility_association import (  # noqa: E402
+    refresh_event_facility_association,
+)
+from app.services.anomaly import refresh_event_anomaly  # noqa: E402
+from app.services.facility_fingerprint import (  # noqa: E402
+    refresh_fingerprints_for_event,
+)
+from app.services.sta import refresh_event_sta  # noqa: E402
+from app.services.environmental import refresh_event_environmental  # noqa: E402
+from app.services.evidence_fusion import refresh_event_evidence_fusion  # noqa: E402
+from app.services.risk import refresh_event_risk  # noqa: E402
 
 
 @dataclass
@@ -63,6 +93,27 @@ class EventFormationStats:
     persistence_updated: int = 0
     persistence_unchanged: int = 0
     persistence_by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Phase 5
+    facility_association_updated: int = 0
+    facility_association_by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Phase 6
+    fingerprint_facilities_refreshed: int = 0
+    fingerprint_by_facility: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Phase 7
+    anomaly_updated: int = 0
+    anomaly_by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Phase 8
+    sta_updated: int = 0
+    sta_by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Phase 9
+    environmental_updated: int = 0
+    environmental_by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Phase 10
+    fusion_updated: int = 0
+    fusion_by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Phase 11
+    risk_updated: int = 0
+    risk_by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -386,6 +437,7 @@ def process_one_observation(
     assert result.updated_event is not None
     state = result.updated_event
 
+    previous_facility_id: Optional[str] = None
     if result.action == MatchAction.CREATED:
         _apply_state_to_new_event(session, state)
     else:
@@ -394,6 +446,7 @@ def process_one_observation(
         )
         if event is None:
             raise RuntimeError(f"Matched event missing in DB: {state.event_id}")
+        previous_facility_id = event.facility_id
         _apply_state_to_existing_event(event, state)
 
     session.add(
@@ -407,6 +460,24 @@ def process_one_observation(
 
     # Phase 4: G.1 for the affected event only (same transaction).
     refresh_event_persistence(session, state.event_id)
+    # Phase 5: I.2 facility association for the affected event only.
+    refresh_event_facility_association(session, state.event_id)
+    # Phase 6: I.3 fingerprint for affected facilities only.
+    refresh_fingerprints_for_event(
+        session,
+        state.event_id,
+        previous_facility_id=previous_facility_id,
+    )
+    # Phase 7: I.4 walk-forward anomaly for the affected event only.
+    refresh_event_anomaly(session, state.event_id)
+    # Phase 8: I.5 STA evidence for the affected event only.
+    refresh_event_sta(session, state.event_id)
+    # Phase 9: I.6 environmental context for the affected event only.
+    refresh_event_environmental(session, state.event_id)
+    # Phase 10: I.7 evidence fusion for the affected event only.
+    refresh_event_evidence_fusion(session, state.event_id)
+    # Phase 11: Stage VI risk prioritization for the affected event only.
+    refresh_event_risk(session, state.event_id)
     return result.action
 
 
@@ -419,11 +490,16 @@ def process_unassigned_observations(
     commit: bool = True,
 ) -> EventFormationStats:
     """
-    Process FIRMS observations with NULL event_id through Phase 3 + Phase 4.
+    Process FIRMS observations with NULL event_id through Phases 3–11.
 
-    Phase 3 attaches detections; Phase 4 recomputes G.1 persistence fields
-    for each affected event only. Does not run batch
-    ``run_persistence_characterization()`` over historical events.
+    Phase 3 attaches detections; Phase 4 recomputes G.1; Phase 5 runs I.2;
+    Phase 6 refreshes I.3 fingerprints for affected facilities only;
+    Phase 7 scores I.4 for each affected event only;
+    Phase 8 attaches I.5 STA evidence for each affected event only;
+    Phase 9 attaches I.6 environmental context for each affected event only;
+    Phase 10 fuses I.7 evidence for each affected event only;
+    Phase 11 scores Stage VI risk for each affected event only.
+    Does not run batch orchestrators over historical tables.
     """
     cfg = config or default_realtime_config()
     stats = EventFormationStats()
@@ -470,9 +546,88 @@ def process_unassigned_observations(
                     "max_gap_hours": event.max_gap_hours,
                     "persistence_label": event.persistence_label,
                 }
+                stats.facility_association_by_event[obs.event_id] = {
+                    "facility_id": event.facility_id,
+                    "facility_association_method": event.facility_association_method,
+                    "facility_attribution_confidence": event.facility_attribution_confidence,
+                    "facility_distance_km": event.facility_distance_km,
+                    "candidate_facility_count": event.candidate_facility_count,
+                }
+                fp_ids: list[str] = []
+                if event.facility_id:
+                    fp_ids.append(event.facility_id)
+                elif event.facility_association_method == "AMBIGUOUS":
+                    fp_ids.extend(
+                        session.scalars(
+                            select(EventFacilityCandidate.facility_id).where(
+                                EventFacilityCandidate.event_id == event.event_id
+                            )
+                        ).all()
+                    )
+                for fid in fp_ids:
+                    if not fid or fid in stats.fingerprint_by_facility:
+                        continue
+                    fp = session.scalar(
+                        select(FacilityThermalFingerprint).where(
+                            FacilityThermalFingerprint.facility_id == fid
+                        )
+                    )
+                    if fp is not None:
+                        stats.fingerprint_by_facility[fid] = {
+                            "event_count": fp.event_count,
+                            "fingerprint_status": fp.fingerprint_status,
+                            "ambiguous_candidate_opportunity_count": (
+                                fp.ambiguous_candidate_opportunity_count
+                            ),
+                        }
+                stats.anomaly_by_event[obs.event_id] = {
+                    "anomaly_score": event.anomaly_score,
+                    "anomaly_status": event.anomaly_status,
+                    "anomaly_confidence": event.anomaly_confidence,
+                    "baseline_observation_count": event.baseline_observation_count,
+                    "baseline_history_status": event.baseline_history_status,
+                    "anomaly_unavailable_reason": event.anomaly_unavailable_reason,
+                }
+                stats.sta_by_event[obs.event_id] = {
+                    "sta_association_status": event.sta_association_status,
+                    "sta_evidence_available": event.sta_evidence_available,
+                    "sta_evidence_quality": event.sta_evidence_quality,
+                    "sta_match_count": event.sta_match_count,
+                    "primary_sta_id": event.primary_sta_id,
+                }
+                stats.environmental_by_event[obs.event_id] = {
+                    "landcover_available": event.landcover_available,
+                    "vegetation_context_available": event.vegetation_context_available,
+                    "builtup_context_available": event.builtup_context_available,
+                    "water_context_available": event.water_context_available,
+                    "agriculture_context_available": event.agriculture_context_available,
+                    "satellite_context_available": event.satellite_context_available,
+                    "dominant_landcover_class": event.dominant_landcover_class,
+                    "water_present": event.water_present,
+                }
+                stats.fusion_by_event[obs.event_id] = {
+                    "source_intelligence_candidate": event.source_intelligence_candidate,
+                    "evidence_strength": event.evidence_strength,
+                    "evidence_fusion_score": event.evidence_fusion_score,
+                    "evidence_sufficiency": event.evidence_sufficiency,
+                    "candidate_is_ground_truth": event.candidate_is_ground_truth,
+                }
+                stats.risk_by_event[obs.event_id] = {
+                    "risk_score": event.risk_score,
+                    "investigation_priority": event.investigation_priority,
+                    "industrial_context": event.industrial_context,
+                    "recommended_action": event.recommended_action,
+                }
 
     unique_touched = sorted(set(stats.event_ids_touched))
     stats.persistence_updated = len(unique_touched)
+    stats.facility_association_updated = len(unique_touched)
+    stats.fingerprint_facilities_refreshed = len(stats.fingerprint_by_facility)
+    stats.anomaly_updated = len(stats.anomaly_by_event)
+    stats.sta_updated = len(stats.sta_by_event)
+    stats.environmental_updated = len(stats.environmental_by_event)
+    stats.fusion_updated = len(stats.fusion_by_event)
+    stats.risk_updated = len(stats.risk_by_event)
     stats.persistence_unchanged = 0
 
     if commit:
@@ -481,12 +636,16 @@ def process_unassigned_observations(
         session.flush()
 
     logger.info(
-        "Phase 3+4 formation/persistence: processed=%s created=%s matched=%s "
-        "persistence_events=%s skipped=%s",
+        "Phase 3-11 formation/.../risk: processed=%s created=%s matched=%s "
+        "anomaly=%s sta=%s env=%s fusion=%s risk=%s skipped=%s",
         stats.processed,
         stats.created,
         stats.matched,
-        stats.persistence_updated,
+        stats.anomaly_updated,
+        stats.sta_updated,
+        stats.environmental_updated,
+        stats.fusion_updated,
+        stats.risk_updated,
         stats.skipped_already_assigned + stats.skipped_invalid,
     )
     return stats

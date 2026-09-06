@@ -1,6 +1,14 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Resolve .env against the backend package root (…/backend), not the process
+# cwd. Otherwise ``pytest`` / tooling run from the repo root miss
+# ``backend/.env`` and fall back to the localhost:5432 defaults — which is
+# the wrong host port when Docker maps PostGIS to 5433.
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_ENV_FILE = _BACKEND_ROOT / ".env"
 
 
 class Settings(BaseSettings):
@@ -9,7 +17,11 @@ class Settings(BaseSettings):
     See `.env.example` for the full list of supported variables.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     app_name: str = "Industrial Fire Intelligence API"
     environment: str = "development"
@@ -37,6 +49,10 @@ class Settings(BaseSettings):
     # FIRMS Area API allows day_range 1..5 for a single request.
     firms_day_range: int = 2
     firms_timeout_seconds: float = 60.0
+
+    # Phase 12: automatic FIRMS NRT polling (default OFF — intentional).
+    firms_nrt_enabled: bool = False
+    firms_nrt_interval_minutes: int = 15
 
     @property
     def cors_origin_list(self) -> list[str]:

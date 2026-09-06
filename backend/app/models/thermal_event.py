@@ -101,6 +101,17 @@ class ThermalEvent(Base):
     facility_distance_km: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     candidate_facility_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # --- STA evidence (Stage I.5) — supporting evidence only, not ground truth ---
+    sta_association_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    primary_sta_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    sta_layer_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    sta_match_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sta_nearest_distance_km: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sta_intersection_area_m2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sta_evidence_available: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    sta_temporal_relation: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sta_evidence_quality: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
     # --- historical baseline / anomaly (Stages I.3 / I.4) ---
     baseline_observation_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     baseline_history_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -118,13 +129,39 @@ class ThermalEvent(Base):
     features_evaluated: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     anomaly_explanation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # --- environmental context availability (Stage I.6); null/false = unavailable ---
+    # --- environmental context (Stage I.6); null/false = unavailable evidence ---
+    # Context/evidence only — not industrial-fire classification or risk.
     landcover_available: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    landcover_source: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    landcover_year: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    dominant_landcover_class: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    dominant_landcover_fraction: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    landcover_class_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     vegetation_context_available: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    vegetation_present: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    vegetation_coverage_fraction: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    distance_to_vegetation_km: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     builtup_context_available: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    builtup_present: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    builtup_coverage_fraction: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    distance_to_builtup_km: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     water_context_available: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    water_present: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    water_coverage_fraction: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    distance_to_water_km: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     agriculture_context_available: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    agriculture_present: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    agriculture_coverage_fraction: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    distance_to_agriculture_km: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     satellite_context_available: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    satellite_source: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    satellite_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    satellite_value_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
     # --- evidence fusion (Stage I.7) ---
     temporal_evidence_available: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
@@ -171,7 +208,7 @@ class ThermalEvent(Base):
     industrial_evidence_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     environmental_support_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     evidence_fusion_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    evidence_coverage: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    evidence_coverage: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     evidence_strength: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     evidence_profile_codes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     supporting_evidence_codes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
