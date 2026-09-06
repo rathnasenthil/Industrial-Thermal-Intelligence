@@ -1,4 +1,4 @@
-"""Dashboard aggregate statistics schemas."""
+﻿"""Dashboard aggregate statistics schemas."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 class DashboardStatistics(BaseModel):
     """
-    Live aggregates from PostgreSQL — never hardcoded Stage VI counts.
+    Live aggregates from PostgreSQL ΓÇö never hardcoded Stage VI counts.
 
     high_priority_count / critical_count refer to investigation_priority
     values, not emergency dispatch alerts or confirmed fires.

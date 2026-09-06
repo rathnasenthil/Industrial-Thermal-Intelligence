@@ -1,4 +1,4 @@
-"""Dashboard statistics endpoint."""
+﻿"""Dashboard statistics endpoint."""
 
 from __future__ import annotations
 

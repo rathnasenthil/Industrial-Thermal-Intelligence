@@ -1,4 +1,4 @@
-"""Pydantic schemas for facility API responses."""
+﻿"""Pydantic schemas for facility API responses."""
 
 from __future__ import annotations
 

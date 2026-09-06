@@ -1,4 +1,4 @@
-"""Pydantic schemas for thermal event API responses."""
+﻿"""Pydantic schemas for thermal event API responses."""
 
 from __future__ import annotations
 
@@ -44,11 +44,11 @@ class EventSummary(BaseModel):
     industrial_context: Optional[str] = None
     risk_score: Optional[float] = Field(
         default=None,
-        description="Engineering investigation prioritization score (0–100), not a fire probability",
+        description="Engineering investigation prioritization score (0ΓÇô100), not a fire probability",
     )
     investigation_priority: Optional[str] = Field(
         default=None,
-        description="Investigation priority (API alias: priority). CRITICAL ≠ confirmed fire.",
+        description="Investigation priority (API alias: priority). CRITICAL Γëá confirmed fire.",
     )
     thermal_severity_band: Optional[str] = None
     recommended_action: Optional[str] = None
@@ -126,7 +126,7 @@ class EventDetail(EventSummary):
 class EvidenceFamilyBlock(BaseModel):
     available: bool
     status: str = Field(
-        description="available | unavailable — never invent missing STA/env evidence",
+        description="available | unavailable ΓÇö never invent missing STA/env evidence",
     )
     score: Optional[float] = None
     summary: Optional[str] = None

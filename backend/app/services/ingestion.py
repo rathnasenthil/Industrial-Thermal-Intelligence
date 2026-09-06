@@ -341,7 +341,7 @@ def _event_row(raw: dict[str, str]) -> tuple[Optional[dict[str, Any]], Optional[
             raw.get("environmental_support_score")
         ),
         "evidence_fusion_score": parse_optional_float(raw.get("evidence_fusion_score")),
-        "evidence_coverage": parse_optional_float(raw.get("evidence_coverage")),
+        "evidence_coverage": parse_optional_str(raw.get("evidence_coverage")),
         "evidence_strength": parse_optional_str(raw.get("evidence_strength")),
         "evidence_profile_codes": parse_optional_str(raw.get("evidence_profile_codes")),
         "supporting_evidence_codes": parse_optional_str(raw.get("supporting_evidence_codes")),
