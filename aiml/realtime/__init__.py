@@ -12,20 +12,27 @@ updates. It deliberately does **not** re-run full-batch ST-DBSCAN:
   new one) using the same spatial/temporal continuity parameters from
   ``STDBSCANConfig``.
 
+Phase 4 adds incremental Stage G.1 persistence for the *affected event only*
+(see ``realtime.persistence``). Persistence = repeatedly observed activity
+over time — not confirmed fire, industrial source, or danger.
+
 A thermal event here is a spatio-temporal cluster of FIRMS hotspot
 observations — **not** a confirmed fire, industrial fire, or alert.
 """
 
 from .config import RealtimeEventConfig, default_realtime_config
 from .incremental_processor import process_observation
+from .persistence import PersistenceFeatures, process_event_persistence
 from .schemas import ActiveEventState, MatchAction, ObservationRecord, ProcessResult
 
 __all__ = [
     "ActiveEventState",
     "MatchAction",
     "ObservationRecord",
+    "PersistenceFeatures",
     "ProcessResult",
     "RealtimeEventConfig",
     "default_realtime_config",
+    "process_event_persistence",
     "process_observation",
 ]

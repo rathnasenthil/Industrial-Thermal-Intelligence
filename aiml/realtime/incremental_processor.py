@@ -2,12 +2,20 @@
 Framework-independent incremental observation → event processor.
 
 ``process_observation`` decides create vs match and returns an updated
-event state. Persistence (SQLAlchemy / PostGIS) lives in the backend.
+event state. Database persistence (SQLAlchemy / PostGIS) lives in the backend.
+
+After an observation is attached, callers should run Phase 4 G.1 via
+``realtime.persistence.process_event_persistence`` for **that event only**,
+using the event's stored detection timestamps — never
+``run_persistence_characterization()`` over the full historical table.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional, Sequence
+
+from src.persistence.config import PersistenceConfig
 
 from .config import RealtimeEventConfig, default_realtime_config
 from .event_matcher import match_observation_to_event
@@ -15,6 +23,7 @@ from .feature_updater import (
     create_event_state_from_observation,
     update_event_with_observation,
 )
+from .persistence import PersistenceFeatures, process_event_persistence
 from .schemas import (
     ActiveEventState,
     MatchAction,
@@ -106,3 +115,19 @@ def process_observation(
         temporal_gap_hours=None,
         spatial_distance_km=None,
     )
+
+
+def characterize_event_persistence(
+    event_id: str,
+    detection_datetimes: Sequence[datetime],
+    *,
+    config: Optional[PersistenceConfig] = None,
+) -> PersistenceFeatures:
+    """
+    Phase 4 helper: G.1 for one event from its detection times.
+
+    Thin wrapper around ``process_event_persistence`` so orchestration code
+    can import formation + G.1 from one module without touching the batch
+    persistence orchestrator.
+    """
+    return process_event_persistence(event_id, detection_datetimes, config=config)
