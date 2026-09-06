@@ -8,5 +8,6 @@ pydantic-settings
 alembic
 python-dotenv
 httpx
+pandas
 pytest
 pytest-asyncio

@@ -207,3 +207,16 @@ class ThermalEvent(Base):
     priority_warnings: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     risk_limiting_evidence_codes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     risk_scoring_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # --- Phase 3 realtime lifecycle (does not change Stage VI semantics) ---
+    # is_active: still within temporal continuity for accepting NRT observations.
+    # This is NOT "confirmed fire" / emergency status.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_detection_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Running count of detections with valid FRP (for correct mean_frp updates).
+    frp_valid_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
