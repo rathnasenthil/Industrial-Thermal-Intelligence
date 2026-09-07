@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional, Sequence
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, UnaryExpression, func, select
 from sqlalchemy.orm import Session
 
 from app.models.event_facility_candidate import EventFacilityCandidate
@@ -21,6 +21,13 @@ from app.schemas.events import (
     PaginatedAlerts,
     PaginatedEvents,
 )
+
+SortBy = Literal["risk_score", "event_start", "last_detection_at"]
+SortOrder = Literal["asc", "desc"]
+ALLOWED_SORT_BY: frozenset[str] = frozenset(
+    {"risk_score", "event_start", "last_detection_at"}
+)
+ALLOWED_SORT_ORDER: frozenset[str] = frozenset({"asc", "desc"})
 
 
 def _apply_event_filters(
@@ -38,6 +45,7 @@ def _apply_event_filters(
     bbox: Optional[str] = None,
     facility_id: Optional[str] = None,
     priorities: Optional[list[str]] = None,
+    is_active: Optional[bool] = None,
 ) -> Select:
     if priority:
         stmt = stmt.where(ThermalEvent.investigation_priority == priority)
@@ -61,6 +69,8 @@ def _apply_event_filters(
         stmt = stmt.where(ThermalEvent.risk_score <= max_risk_score)
     if facility_id:
         stmt = stmt.where(ThermalEvent.facility_id == facility_id)
+    if is_active is not None:
+        stmt = stmt.where(ThermalEvent.is_active.is_(is_active))
     if bbox:
         box = parse_bbox(bbox)
         envelope = func.ST_MakeEnvelope(
@@ -68,6 +78,45 @@ def _apply_event_filters(
         )
         stmt = stmt.where(func.ST_Intersects(ThermalEvent.geometry, envelope))
     return stmt
+
+
+def event_sort_clauses(
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
+) -> Sequence[UnaryExpression]:
+    """
+    Build ORDER BY clauses for event lists.
+
+    Default (both omitted): risk_score DESC, event_start DESC, event_id ASC.
+    When sort_by is set and sort_order omitted: DESC (including last_detection_at).
+    """
+    if sort_by is not None and sort_by not in ALLOWED_SORT_BY:
+        raise ValueError(
+            "sort_by must be one of: risk_score, event_start, last_detection_at"
+        )
+    if sort_order is not None and sort_order not in ALLOWED_SORT_ORDER:
+        raise ValueError("sort_order must be one of: asc, desc")
+
+    if sort_by is None and sort_order is None:
+        return (
+            ThermalEvent.risk_score.desc().nullslast(),
+            ThermalEvent.event_start.desc().nullslast(),
+            ThermalEvent.event_id.asc(),
+        )
+
+    primary_key = sort_by or "risk_score"
+    descending = (sort_order or "desc") == "desc"
+    column = getattr(ThermalEvent, primary_key)
+    primary = column.desc().nullslast() if descending else column.asc().nullslast()
+
+    if primary_key == "risk_score":
+        # Keep event_start as secondary when explicitly sorting by risk.
+        return (
+            primary,
+            ThermalEvent.event_start.desc().nullslast(),
+            ThermalEvent.event_id.asc(),
+        )
+    return (primary, ThermalEvent.event_id.asc())
 
 
 def event_to_summary(event: ThermalEvent) -> EventSummary:
@@ -94,6 +143,8 @@ def event_to_summary(event: ThermalEvent) -> EventSummary:
         investigation_priority=event.investigation_priority,
         thermal_severity_band=event.thermal_severity_band,
         recommended_action=event.recommended_action,
+        is_active=bool(event.is_active),
+        last_detection_at=event.last_detection_at,
     )
 
 
@@ -114,6 +165,9 @@ def list_events(
     bbox: Optional[str] = None,
     facility_id: Optional[str] = None,
     priorities: Optional[list[str]] = None,
+    is_active: Optional[bool] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
 ) -> PaginatedEvents:
     page = max(page, 1)
     page_size = min(max(page_size, 1), 500)
@@ -133,17 +187,14 @@ def list_events(
         bbox=bbox,
         facility_id=facility_id,
         priorities=priorities,
+        is_active=is_active,
     )
 
     count_stmt = select(func.count()).select_from(base.subquery())
     total = int(db.scalar(count_stmt) or 0)
 
     stmt = (
-        base.order_by(
-            ThermalEvent.risk_score.desc().nullslast(),
-            ThermalEvent.event_start.desc().nullslast(),
-            ThermalEvent.event_id.asc(),
-        )
+        base.order_by(*event_sort_clauses(sort_by=sort_by, sort_order=sort_order))
         .offset((page - 1) * page_size)
         .limit(page_size)
     )

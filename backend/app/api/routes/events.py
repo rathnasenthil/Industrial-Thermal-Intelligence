@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -13,7 +13,6 @@ from app.schemas.events import (
     EventDetail,
     EventEvidence,
     EventTimeline,
-    PaginatedAlerts,
     PaginatedEvents,
 )
 from app.services import events as events_service
@@ -44,6 +43,24 @@ def list_events(
         None,
         description="Bounding box min_lon,min_lat,max_lon,max_lat (PostGIS ST_Intersects)",
     ),
+    is_active: Optional[bool] = Query(
+        None,
+        description=(
+            "When true/false, filter realtime-active vs historical events. "
+            "Omit to return all events (backward compatible)."
+        ),
+    ),
+    sort_by: Optional[Literal["risk_score", "event_start", "last_detection_at"]] = Query(
+        None,
+        description=(
+            "Primary sort column. Omit with sort_order to keep default: "
+            "risk_score DESC, event_start DESC, event_id ASC."
+        ),
+    ),
+    sort_order: Optional[Literal["asc", "desc"]] = Query(
+        None,
+        description="Sort direction for sort_by (default DESC when sort_by is set).",
+    ),
     db: Session = Depends(get_db),
 ) -> PaginatedEvents:
     try:
@@ -61,6 +78,9 @@ def list_events(
             min_risk_score=min_risk_score,
             max_risk_score=max_risk_score,
             bbox=bbox,
+            is_active=is_active,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

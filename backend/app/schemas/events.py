@@ -52,6 +52,17 @@ class EventSummary(BaseModel):
     )
     thermal_severity_band: Optional[str] = None
     recommended_action: Optional[str] = None
+    is_active: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Realtime lifecycle flag: True while the event remains within temporal "
+            "continuity for NRT matching. Not an emergency/confirmed-fire status."
+        ),
+    )
+    last_detection_at: Optional[datetime] = Field(
+        default=None,
+        description="Timestamp of the most recent detection attached to this event.",
+    )
 
 
 class FacilityCandidateSummary(BaseModel):

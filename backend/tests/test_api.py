@@ -42,6 +42,8 @@ def _sample_summary() -> EventSummary:
         investigation_priority="LOW",
         thermal_severity_band="LOW",
         recommended_action="MONITOR",
+        is_active=False,
+        last_detection_at=datetime(2023, 1, 1, 6, 55, tzinfo=timezone.utc),
     )
 
 
@@ -239,3 +241,83 @@ def test_events_invalid_bbox_returns_400() -> None:
     ):
         response = client.get("/api/events", params={"bbox": "bad"})
     assert response.status_code == 400
+
+
+def test_events_is_active_true_forwarded() -> None:
+    payload = PaginatedEvents(
+        items=[_sample_summary()],
+        total=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+    )
+    with patch(
+        "app.api.routes.events.events_service.list_events",
+        return_value=payload,
+    ) as mock:
+        response = client.get("/api/events", params={"is_active": "true"})
+    assert response.status_code == 200
+    assert response.json()["items"][0]["is_active"] is False
+    assert "last_detection_at" in response.json()["items"][0]
+    assert mock.call_args.kwargs["is_active"] is True
+
+
+def test_events_is_active_false_forwarded() -> None:
+    payload = PaginatedEvents(
+        items=[_sample_summary()],
+        total=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+    )
+    with patch(
+        "app.api.routes.events.events_service.list_events",
+        return_value=payload,
+    ) as mock:
+        response = client.get("/api/events", params={"is_active": "false"})
+    assert response.status_code == 200
+    assert mock.call_args.kwargs["is_active"] is False
+
+
+def test_events_sort_by_last_detection_at_forwarded() -> None:
+    active = _sample_summary()
+    active.is_active = True
+    active.last_detection_at = datetime(2026, 9, 6, 8, 22, tzinfo=timezone.utc)
+    payload = PaginatedEvents(
+        items=[active],
+        total=1,
+        page=1,
+        page_size=10,
+        total_pages=1,
+    )
+    with patch(
+        "app.api.routes.events.events_service.list_events",
+        return_value=payload,
+    ) as mock:
+        response = client.get(
+            "/api/events",
+            params={"sort_by": "last_detection_at", "page_size": 10},
+        )
+    assert response.status_code == 200
+    assert mock.call_args.kwargs["sort_by"] == "last_detection_at"
+    assert mock.call_args.kwargs["sort_order"] is None
+    assert response.json()["items"][0]["is_active"] is True
+
+
+def test_events_default_omits_active_and_sort_filters() -> None:
+    payload = PaginatedEvents(
+        items=[_sample_summary()],
+        total=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+    )
+    with patch(
+        "app.api.routes.events.events_service.list_events",
+        return_value=payload,
+    ) as mock:
+        response = client.get("/api/events")
+    assert response.status_code == 200
+    assert mock.call_args.kwargs["is_active"] is None
+    assert mock.call_args.kwargs["sort_by"] is None
+    assert mock.call_args.kwargs["sort_order"] is None
