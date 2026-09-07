@@ -9,6 +9,7 @@ alembic
 python-dotenv
 httpx
 pandas
+numpy
 geopandas
 shapely
 pyproj

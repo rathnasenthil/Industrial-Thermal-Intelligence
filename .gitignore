@@ -71,6 +71,8 @@ Thumbs.db
 *.log
 
 # ---------------------------------------------------------------------------
-# Database / Docker volumes (if ever created locally)
+# Database / Docker volumes / dumps (if ever created locally)
 # ---------------------------------------------------------------------------
 pgdata/
+*.dump
+industrial_fire_db_backup.dump

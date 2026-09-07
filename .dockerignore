@@ -1,0 +1,48 @@
+.git
+.gitignore
+.cursor
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.venv
+**/venv
+**/env
+**/*.egg-info
+
+# Secrets and local env (never bake into the image)
+.env
+.env.*
+!**/.env.example
+
+# Large / local-only artifacts
+*.dump
+industrial_fire_db_backup.dump
+pgdata/
+
+# Frontend and docs are not required for the backend image
+frontend/
+docs/
+node_modules/
+
+# Local Docker Compose helpers (API image does not need the DB image init)
+docker-compose.yml
+docker/
+
+# AIML bulk datasets (realtime degrades gracefully when external files are absent)
+aiml/data/raw/**
+aiml/data/processed/**
+aiml/data/external/**
+!aiml/data/raw/.gitkeep
+!aiml/data/processed/.gitkeep
+!aiml/data/external/.gitkeep
+
+# Notebooks / IDE / OS noise
+**/.ipynb_checkpoints
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+README.md

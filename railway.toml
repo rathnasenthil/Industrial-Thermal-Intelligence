@@ -1,0 +1,12 @@
+# Minimal Railway config for the monorepo backend (Dockerfile at repo root).
+# Secrets and production URLs are set in the Railway dashboard — never here.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/api/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
